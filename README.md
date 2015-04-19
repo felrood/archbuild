@@ -1,6 +1,8 @@
 # Archbuild
 
-Build customizable Arch Linux images for KVM/QEMU.
+**Build customizable Arch Linux images for KVM/QEMU.**
+
+WARNING: read the script, improper use might eat your data
 
 ## Intro
 
@@ -14,6 +16,8 @@ Features:
 - Resize qcow2 images
 - Post-install hook
 - First-run hook
+
+Caching packages with something like [lazymirror](https://github.com/felrood/lazymirror) speeds up the process a lot!
 
 ## Dependencies
 
