@@ -1,0 +1,154 @@
+#!/bin/bash
+
+
+if [ $# != 1 ]; then
+	echo "Expected 1 argument"
+	exit 1
+fi
+
+if [ ! -f "templates/$1/$1.conf" ]; then
+	echo "Config file not found"
+	exit 1
+fi
+
+source "templates/$1/$1.conf"
+
+if [ -z "$NAME" ]; then
+	echo "NAME variable not set"
+	exit 1
+fi
+
+if [ -z "$TMPDISKSIZE" ]; then
+	echo "TMPDISKSIZE variable not set"
+	exit 1
+fi
+
+if [ -z "$DISKSIZE" ]; then
+	echo "DISKSIZE variable not set"
+	exit 1
+fi
+
+if [ -z "$PASSWD" ]; then
+	echo "PASSWD variable not set"
+	exit 1
+fi
+
+
+if [ ! -d "tmp" ]; then
+	mkdir tmp
+fi
+
+cd tmp
+
+if [ -f "$NAME.raw" ]; then
+	echo "$NAME.raw exists. Remove manually"
+	exit 1
+fi
+
+MNT=mount | grep /mnt | wc -l
+
+if [ ! -z $MNT ]; then
+	echo "/mnt is mounted."
+	exit 1
+fi
+
+modprobe nbd || exit 1
+
+echo "Building image for: $NAME"
+
+# refresh and update pacman
+pacman -Syu --noconfirm || exit 1
+
+# allocate diskspace
+fallocate -l $TMPDISKSIZE "$NAME.raw" || exit 1
+
+# format with one big bootable partition
+echo -e "n\np\n1\n\n\na\nw" | fdisk "$NAME.raw" > /dev/null || exit 1
+
+# mount loopback device
+losetup -P /dev/loop0 "$NAME.raw" || exit 1
+
+mkfs.ext4 /dev/loop0p1 > /dev/null || exit 1
+
+mount /dev/loop0p1 /mnt || exit 1
+
+PKGS=`cat ../templates/$NAME/packages.list | tr "\n" " "`
+
+cp -r ../templates/$NAME/fs/* /mnt
+
+echo "Installing packages: $PKGS"
+pacstrap /mnt $PKGS || exit 1
+
+# TODO delete .pacorig
+
+echo "Installing bootloader"
+# install bootloader
+extlinux --install /mnt/boot
+dd if=/usr/lib/syslinux/bios/mbr.bin conv=notrunc bs=440 count=1 of=/dev/loop0
+
+cp -r ../templates/$NAME/fs/* /mnt
+
+# reinstall kernel, to do mkinitcpio right
+#pacstrap /mnt linux
+
+# remove fallback
+#rm /mnt/boot/initramfs-linux-fallback.img
+
+# Set root password
+echo "Setting root password"
+echo -e "$PASSWD\n$PASSWD" | passwd -R /mnt root
+
+# Generating locales
+echo "Generating locale"
+chroot /mnt locale-gen
+
+# Post install
+
+if [ -f ../templates/$NAME/postinstall.sh ]; then
+
+	echo "Executing post install script"
+	cp ../templates/$NAME/postinstall.sh /mnt
+	chroot /mnt /postinstall.sh
+
+	rm /mnt/postinstall.sh
+fi
+
+echo "Setup done"
+
+umount /mnt
+
+echo "Clearing unused space"
+
+zerofree -v /dev/loop0p1
+
+losetup -d /dev/loop0
+
+# Convert to qcow2
+
+echo "Convert to qcow2"
+
+qemu-img convert $NAME.raw -O qcow2 $NAME.qcow2 || exit 1
+
+echo "Resize to $TMPDISKSIZE + $DISKSIZE"
+
+qemu-img resize $NAME.qcow2 +$DISKSIZE || exit 1
+
+qemu-nbd -c /dev/nbd0 $NAME.qcow2 || exit 1
+
+echo -e "d\nn\np\n1\n\n\na\nw" | fdisk /dev/nbd0 > /dev/null
+
+qemu-nbd -d /dev/nbd0 || exit 1
+
+qemu-nbd -P1 -c /dev/nbd0 $NAME.qcow2 || exit 1
+
+e2fsck -f /dev/nbd0 || exit 1
+resize2fs /dev/nbd0 || exit 1
+
+qemu-nbd -d /dev/nbd0 || exit 1
+
+CUR=`pwd`
+
+# copy if you like
+
+#su - qemu -c "cp $CUR/$NAME.qcow2 /srv/images/$NAME.qcow2"
+rm $NAME.raw

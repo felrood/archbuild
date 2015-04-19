@@ -1,0 +1,10 @@
+[Unit]
+Description=First run
+
+[Service]
+Type=oneshot
+ExecStart=/etc/firstrun/firstrun.sh
+
+[Install]
+WantedBy=multi-user.target
+
